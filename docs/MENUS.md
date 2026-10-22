@@ -50,7 +50,7 @@ Recovered display tabs are mapped to portable settings: 3D Accelerator selects
 OpenA2 enhanced graphics, 640×480 selects classic rendering, and 320×200 selects
 a low-resolution presentation of the classic frame. The last mode downsamples
 the presentation; it does not replace the internal renderer with a 320×200
-pipeline. F4/G continues to switch enhanced/classic during a race.
+pipeline. F4/4/G continues to switch enhanced/classic during a race.
 
 Even wachten artwork is presented during initial resource loading and while
 preparing the first race frame. Fast loads remain fast: there is no added delay.
@@ -64,12 +64,14 @@ Windows saves are not imported. Profile database replacements are atomic and
 loads validate the entire document before replacing live state.
 
 Each profile has ten simulation save slots named using its immutable ID. Main
-menu S/L opens slots; F6/F9 saves/loads slot 1. The old port-wide slot files remain
+menu S/L opens slots; F6/6 and F9/9 save/load slot 1. The old port-wide slot files remain
 available through Oud globaal slot laden. Race save version 2 adds airborne
 roadwork state; old version 1 saves load with pristine roadwork zones and retain
 their saved prior simulation/RNG fields. Headless demos never award profile
 scores. Deleting a profile leaves its retired simulation files untouched and
 never reuses its ID.
 
-Menu C opens the port's car selector, T opens unlocked stages, and F1 opens help.
+Menu C opens the port's car selector, T opens unlocked stages, and F1/1 opens help.
+Number keys 1–9 and their numeric-keypad equivalents mirror F1–F9 outside player
+name entry and are reserved from driving-key remapping.
 These retain access to features alongside the six original main-menu actions.

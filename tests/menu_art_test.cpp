@@ -171,6 +171,10 @@ void original(const std::filesystem::path &path) {
   check(art.original(), "Original CD does not expose the 329-sprite menu archive");
   art.background(MenuPage::Main);
   check(renderer.pixels() == assets.image("hoofd.pcx").pixels, "Main menu PCX must remain intact");
+  auto background = renderer.pixels();
+  art.topButtons();
+  check(renderer.pixels() == background,
+        "Idle top buttons must exactly overlay the original background without doubled edges");
   art.button(MenuButton::Start, 0, 124);
   auto idle = renderer.pixels();
   art.button(MenuButton::Start, 0, 124, true);

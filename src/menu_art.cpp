@@ -213,10 +213,15 @@ MenuRect MenuArt::button(MenuButton button, int x, int y, bool selected, float a
   }
   return rect;
 }
+MenuRect MenuArt::topButtonRect(MenuButton button) {
+  // These coordinates exactly match the idle artwork already in hoofd.pcx.
+  return buttonRect(button, button == MenuButton::Exit ? 9 : 528, 27);
+}
 void MenuArt::topButtons(bool exitSelected, bool helpSelected) {
+  const auto exit = topButtonRect(MenuButton::Exit), help = topButtonRect(MenuButton::Help);
   if (page_ == MenuPage::Main || page_ == MenuPage::Players)
-    button(MenuButton::Exit, 0, 18, exitSelected);
-  button(MenuButton::Help, 535, 18, helpSelected);
+    button(MenuButton::Exit, exit.x, exit.y, exitSelected);
+  button(MenuButton::Help, help.x, help.y, helpSelected);
 }
 void MenuArt::routeCard(int stage, int x, int y) {
   if (original_)

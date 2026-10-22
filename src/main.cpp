@@ -293,6 +293,7 @@ public:
       if (page_ == Page::Movie && !movie_->advance(dt))
         finishMovie();
       if (page_ == Page::Playing && !paused_) {
+        const float approachSpeed = race_->player.speed;
         accumulator += dt;
         Input input = controls();
         while (accumulator >= 1.0f / 120.0f) {
@@ -302,31 +303,33 @@ public:
         for (auto &event : race_->takeEvents()) {
           if (audio_ && settings_.effects)
             audio_->play(event.sound);
-          if (!event.message.empty()) {
-            message_ = event.message;
-            messageTime_ = 2.0f;
-          }
         }
         if (race_->status() == RaceStatus::Finished || race_->status() == RaceStatus::Failed) {
-          page_ = Page::Results;
-          selected_ = 0;
-          if (attemptActive_ && profiles_) {
-            try {
-              profiles_->recordStage(attempt_, race_->stage(),
-                                     race_->status() == RaceStatus::Finished, race_->player.money,
-                                     race_->player.elapsed);
-              saveProfiles();
-            } catch (const std::exception &e) {
-              notify(std::string("PROFIEL: ") + e.what());
+          if (finishTime_ == 0) {
+            finishSpeed_ = approachSpeed;
+            selected_ = 0;
+            if (attemptActive_ && profiles_) {
+              try {
+                profiles_->recordStage(attempt_, race_->stage(),
+                                       race_->status() == RaceStatus::Finished, race_->player.money,
+                                       race_->player.elapsed);
+                saveProfiles();
+              } catch (const std::exception &e) {
+                notify(std::string("PROFIEL: ") + e.what());
+              }
+              attemptActive_ = false;
             }
-            attemptActive_ = false;
+            settings_.unlocked = std::max(
+                settings_.unlocked,
+                std::min(5, race_->stage() + (race_->status() == RaceStatus::Finished ? 1 : 0)));
+            writeSettings();
           }
-          settings_.unlocked = std::max(
-              settings_.unlocked,
-              std::min(5, race_->stage() + (race_->status() == RaceStatus::Finished ? 1 : 0)));
-          writeSettings();
-          if (race_->status() == RaceStatus::Finished && race_->stage() == 5)
-            playMovie("A2WIN.SMK", Page::Results);
+          finishTime_ += dt;
+          if (race_->status() == RaceStatus::Failed || finishTime_ >= 3) {
+            page_ = Page::Results;
+            if (race_->status() == RaceStatus::Finished && race_->stage() == 5)
+              playMovie("A2WIN.SMK", Page::Results);
+          }
         }
       } else
         accumulator = 0;
@@ -402,7 +405,7 @@ private:
   fs::path saveDir_;
   bool quit_ = false, paused_ = false, hasRace_ = false;
   int selected_ = 0, slot_ = 0;
-  float animation_ = 0, messageTime_ = 0;
+  float animation_ = 0, messageTime_ = 0, finishTime_ = 0, finishSpeed_ = 0;
   std::string error_, message_;
   void load(const fs::path &path) {
     auto data = std::make_unique<GameData>(path);
@@ -514,6 +517,7 @@ private:
     hasRace_ = true;
     page_ = Page::Playing;
     paused_ = false;
+    finishTime_ = 0;
     selected_ = 0;
     settings_.car = car;
     // Decode and filter the first race frame while the genuine loading artwork
@@ -896,7 +900,8 @@ private:
       if (code == SDL_SCANCODE_UNKNOWN)
         return;
       if (key == SDLK_RETURN || key == SDLK_SPACE || key == SDLK_p || key == SDLK_g ||
-          key == SDLK_m || key == SDLK_r || (key >= SDLK_F1 && key <= SDLK_F12)) {
+          key == SDLK_m || key == SDLK_r || (key >= SDLK_F1 && key <= SDLK_F12) ||
+          (key >= SDLK_1 && key <= SDLK_9) || (key >= SDLK_KP_1 && key <= SDLK_KP_9)) {
         notify("DEZE TOETS IS GERESERVEERD VOOR EEN SPELFUNCTIE");
         return;
       }
@@ -937,6 +942,12 @@ private:
       }
       return;
     }
+    // Profile name entry above keeps literal digits. Elsewhere, both number
+    // rows mirror the function keys, including keyboard layouts with a keypad.
+    if (key >= SDLK_1 && key <= SDLK_9)
+      key = SDL_Keycode(SDLK_F1 + (key - SDLK_1));
+    else if (key >= SDLK_KP_1 && key <= SDLK_KP_9)
+      key = SDL_Keycode(SDLK_F1 + (key - SDLK_KP_1));
     if (key == SDLK_F4 || key == SDLK_g) {
       toggleGraphics();
       return;
@@ -961,9 +972,13 @@ private:
         paused_ = false;
       } else if (key == SDLK_p)
         paused_ = !paused_;
+      else if (key == SDLK_SPACE && race_->fineDelay() > 0)
+        race_->dismissFine();
       else if (key == SDLK_RETURN) {
         paused_ = false;
         race_->dismissFine();
+        if (race_->status() == RaceStatus::Finished)
+          finishTime_ = 3;
       } else if (key >= SDLK_F1 && key <= SDLK_F3)
         settings_.camera = int(key - SDLK_F1);
       else if (key == SDLK_F5)
@@ -1070,11 +1085,11 @@ private:
     if (page_ == Page::Playing || page_ == Page::Error)
       return;
     if ((page_ == Page::Main || page_ == Page::Players) &&
-        MenuRect{0, 20, 105, 45}.contains(x, y) && click) {
+        MenuArt::topButtonRect(MenuButton::Exit).contains(x, y) && click) {
       quitGame();
       return;
     }
-    if (page_ != Page::Help && MenuRect{535, 20, 105, 45}.contains(x, y) && click) {
+    if (page_ != Page::Help && MenuArt::topButtonRect(MenuButton::Help).contains(x, y) && click) {
       helpReturn_ = page_;
       go(Page::Help);
       return;
@@ -1208,7 +1223,8 @@ private:
           key(SDLK_LEFT);
         if (b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT)
           key(SDLK_RIGHT);
-        if (b == SDL_CONTROLLER_BUTTON_A && page_ != Page::Playing)
+        if (b == SDL_CONTROLLER_BUTTON_A &&
+            (page_ != Page::Playing || race_->fineDelay() > 0))
           key(SDLK_RETURN);
         if (b == SDL_CONTROLLER_BUTTON_B)
           key(SDLK_ESCAPE);
@@ -1277,8 +1293,25 @@ private:
       renderer_.blit(movie_->image(), 0, 0, 640, 480);
       renderer_.text(480, 466, "ENTER / ESC: OVERSLAAN", 0xffeeeeee);
     } else if (page_ == Page::Playing) {
-      scene_->draw(*race_, settings_.camera, settings_.radar, settings_.horizon,
-                   settings_.dashboard);
+      if (race_->status() == RaceStatus::Finished) {
+        // Keep the scored snapshot fixed while the presentation coasts clear
+        // of the gantry. This seconds-based slowdown is reconstructed.
+        Race presentation = *race_;
+        const float coast = std::exp(-finishTime_);
+        presentation.player.distance = std::min(race_->track().length(),
+            race_->player.distance + finishSpeed_ * (1 - coast) * (10.0f / 3.6f));
+        presentation.player.speed = finishSpeed_ * coast;
+        presentation.player.elapsed += finishTime_;
+        presentation.player.timeLeft = std::max(0.0f, presentation.player.timeLeft - finishTime_);
+        for (auto &v : presentation.vehicles)
+          v.distance = std::clamp(v.distance + v.speed * finishTime_ * (10.0f / 3.6f) *
+                                 (v.oncoming ? -1 : 1), 0.0f, presentation.track().length());
+        scene_->draw(presentation, settings_.camera, settings_.radar, settings_.horizon,
+                     settings_.dashboard);
+        scene_->drawFinish(finishTime_, settings_.camera == 0 && settings_.dashboard ? 0 : 1);
+      } else
+        scene_->draw(*race_, settings_.camera, settings_.radar, settings_.horizon,
+                     settings_.dashboard);
       if (paused_)
         scene_->drawPause();
     } else if (page_ == Page::Error) {
@@ -1442,10 +1475,10 @@ private:
         renderer_.dim(.3f);
         renderer_.rect(30, 115, 580, 300, 0xff253847);
         const char *lines[]{"PIJLEN / WASD: rijden (of je ingestelde toetsen)",
-                            "SPATIE: handrem    F1 / F2 / F3: camera",
-                            "F4 / G: verbeterde graphics    F5: radar",
+                            "SPATIE: handrem    F1-F3 / 1-3: camera",
+                            "F4 / 4 / G: graphics    F5 / 5: radar",
                             "P / ENTER: pauze / verder    R: etappe opnieuw",
-                            "F6 / F9: snel opslaan / laden",
+                            "F6 / 6: opslaan    F9 / 9: laden",
                             "M: geluid    F11: volledig scherm    ESC: hoofdmenu",
                             "C: auto kiezen    T: etappe kiezen    S: opslaan / laden",
                             "Controller: stick, RT/LT, A, X en schouderknoppen",
@@ -1615,6 +1648,7 @@ private:
                   ? Page::Results
                   : Page::Playing;
       paused_ = false;
+      finishTime_ = 0;
       message_ = "SPEL GELADEN";
     } catch (const std::exception &e) {
       message_ = std::string("LOAD ERROR: ") + e.what();

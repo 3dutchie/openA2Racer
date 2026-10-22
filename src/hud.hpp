@@ -10,6 +10,7 @@ public:
   Hud(Renderer &, Assets &);
   void draw(const Race &, int camera, bool radar);
   void drawPause();
+  void drawFinish(float presentationSeconds, int camera);
 
 private:
   Renderer &renderer_;
@@ -22,6 +23,7 @@ private:
   void instruments(const Player &, int camera);
   void counters(const Race &);
   void radar(const Race &, int camera);
+  void ticket(const Race &, int camera);
   void fallback(const Race &, int camera);
 };
 } // namespace a2

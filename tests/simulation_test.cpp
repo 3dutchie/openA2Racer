@@ -19,13 +19,27 @@ static Track straight(float size) {
   return t;
 }
 static void running(Race &r) {
-  for (int n = 0; n < 361; ++n)
+  for (int n = 0; n < 721; ++n)
     r.update(1.0f / 120, {});
   check(r.status() == RaceStatus::Running, "countdown transition");
 }
 int main() {
   try {
     std::array<Track, 3> tracks{straight(20000), straight(25000), straight(30000)};
+    Race sequence(tracks);
+    check(sequence.introCountdown() == 3 && sequence.player.timeLeft == 180,
+          "race begins with the camera phase and original three-minute timer");
+    for (int i = 0; i < 361; ++i)
+      sequence.update(1.0f / 120, {1, 0, 1, false});
+    check(sequence.status() == RaceStatus::Countdown && sequence.introCountdown() == 0 &&
+              sequence.player.speed == 0 && sequence.player.timeLeft == 180,
+          "camera descent ends before start lights and racing remain frozen");
+    constexpr float initialTimes[]{180, 300, 540, 540, 300, 180};
+    for (int stage = 0; stage < 6; ++stage) {
+      sequence.start(stage);
+      check(sequence.player.timeLeft == initialTimes[stage] && sequence.position() == 6,
+            "six stages use original time limits and six-car starting grid");
+    }
     auto p = sampleTrack(tracks[0], 1000, 30);
     check(std::abs(p.position.x - 30) < 0.01f && std::abs(p.position.z - 1000) < 0.01f,
           "road sampling");
@@ -73,6 +87,99 @@ int main() {
                   barrier.player.distance > before,
               "median collision leaves ordinary driving unaffected");
       }
+    // Steering centers the wheels in the original, not the world direction.
+    // Releasing a turn must retain that direction, including through bends.
+    for (int stage : {0, 3}) {
+      Race steering(tracks);
+      steering.start(stage);
+      running(steering);
+      steering.vehicles.clear();
+      steering.pickups.clear();
+      steering.roadProps.clear();
+      steering.player.speed = 100;
+      steering.player.heading = .05f;
+      const float lateral = steering.player.lateral;
+      steering.update(.1f, {});
+      check(std::abs(steering.player.heading - .05f) < .00001f &&
+                steering.player.lateral > lateral,
+            "releasing steering preserves direction and lateral travel");
+      steering.player.speed = 0;
+      steering.update(.1f, {0, 0, 1, false});
+      check(std::abs(steering.player.heading - .05f) < .00001f,
+            "steering cannot rotate a stationary car");
+    }
+    for (int stage : {0, 3})
+      for (float direction : {-1.0f, 1.0f}) {
+        Race wheel(tracks);
+        wheel.start(stage);
+        running(wheel);
+        wheel.vehicles.clear();
+        wheel.pickups.clear();
+        wheel.roadProps.clear();
+        wheel.player.lateral = 45;
+        wheel.player.speed = 80;
+        wheel.update(.15f, {0, 0, direction, false});
+        check(direction * wheel.player.steering > .99f && direction * wheel.player.heading > 0,
+              "wheel input ramps toward the requested turn in both directions");
+        wheel.update(.08f, {});
+        check(direction * wheel.player.steering > 0 && direction * wheel.player.steering < .6f,
+              "released steering returns smoothly toward center");
+        std::ostringstream savedWheel;
+        wheel.save(savedWheel);
+        Race restoredWheel(tracks);
+        std::istringstream wheelInput(savedWheel.str());
+        restoredWheel.load(wheelInput);
+        check(restoredWheel.player.steering == wheel.player.steering,
+              "snapshot preserves a partially returning wheel");
+        wheel.update(.2f, {});
+        restoredWheel.update(.2f, {});
+        check(wheel.player.steering == 0 && restoredWheel.player.heading == wheel.player.heading,
+              "return to exact center continues deterministically after loading");
+        const float heading = wheel.player.heading;
+        wheel.update(.1f, {});
+        check(wheel.player.heading == heading && std::abs(heading) > .01f,
+              "centered wheel stops turning without snapping the car back to the road");
+        std::string legacy = savedWheel.str();
+        const auto end = legacy.rfind("\nEND\n");
+        const auto steeringLine = legacy.rfind('\n', end - 1);
+        legacy.erase(steeringLine + 1, end - steeringLine);
+        legacy.replace(13, 1, "3");
+        std::istringstream oldWheel(legacy);
+        restoredWheel.load(oldWheel);
+        check(restoredWheel.player.steering == 0 &&
+                  restoredWheel.player.heading != 0,
+              "version3 saves retain car direction and migrate to centered wheels");
+      }
+    Track bend;
+    for (Vec2 center : {Vec2{0, 0}, Vec2{0, 5000},
+                        Vec2{5000 * std::sin(.1f), 5000 + 5000 * std::cos(.1f)}}) {
+      RoadRecord record;
+      record.center = center;
+      if (!bend.road.empty())
+        bend.distances.push_back(bend.distances.back() + length(center - bend.road.back().center));
+      else
+        bend.distances.push_back(0);
+      bend.road.push_back(record);
+    }
+    const std::array<Track, 3> bends{bend, bend, bend};
+    for (int stage : {0, 3}) {
+      Race steering(bends);
+      steering.start(stage);
+      running(steering);
+      steering.vehicles.clear();
+      steering.pickups.clear();
+      steering.roadProps.clear();
+      steering.player.distance = 4999;
+      steering.player.speed = 100;
+      auto before = steering.pose(steering.player.distance);
+      steering.update(1.0f / 120, {});
+      auto after = steering.pose(steering.player.distance);
+      const Vec3 direction = after.forward * std::cos(steering.player.heading) +
+                             after.right * std::sin(steering.player.heading);
+      check(length(direction - before.forward) < .00001f &&
+                std::abs(steering.player.heading) > .09f,
+            "a road bend does not automatically rotate the car on either route direction");
+    }
     Race r(tracks);
     running(r);
     r.vehicles.clear();
@@ -109,10 +216,14 @@ int main() {
       pickup.vehicles.clear();
       pickup.pickups = {{pickup.player.distance, pickup.player.lateral, kinds[i], false}};
       pickup.takeEvents();
+      const float priorTime = pickup.player.timeLeft;
       pickup.update(1.0f / 120, {});
       auto events = pickup.takeEvents();
       check(events.size() == 2 && events[0].sound == effects[i] && events[1].sound == speech[i],
             "pickup plays its effect and correctly mapped original speech");
+      if (kinds[i] == PickupKind::Time)
+        check(std::abs(pickup.player.timeLeft - priorTime - 120) < .01f,
+              "original INI time bonus adds two minutes");
       pickup.update(1.0f / 120, {});
       check(pickup.takeEvents().empty(), "collected pickup must not repeat speech or effect");
     }
@@ -195,6 +306,13 @@ int main() {
     reject("bogus");
     reject(save.str().substr(0, save.str().size() / 2));
     reject(save.str() + "TRAILING");
+    for (const char *invalidSteering : {"nan", "2"}) {
+      std::string badWheel = save.str();
+      const auto end = badWheel.rfind("\nEND\n");
+      const auto wheel = badWheel.rfind('\n', end - 1);
+      badWheel.replace(wheel + 1, end - wheel - 1, invalidSteering);
+      reject(badWheel);
+    }
     std::string wrongVersion = save.str();
     wrongVersion.replace(13, 1, "9");
     reject(wrongVersion);

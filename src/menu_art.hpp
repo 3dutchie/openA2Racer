@@ -41,6 +41,7 @@ public:
   MenuRect button(MenuButton, int x, int y, bool selected = false, float animation = 0,
                   bool pressed = false);
   static MenuRect buttonRect(MenuButton, int x, int y);
+  static MenuRect topButtonRect(MenuButton);
   void topButtons(bool exitSelected = false, bool helpSelected = false);
   void routeCard(int stage, int x = 348, int y = 247);
   void serifText(int x, int y, std::string_view text, uint32_t color = 0xffffff00, int size = 18,

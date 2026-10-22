@@ -13,12 +13,16 @@ public:
             bool dashboard = true);
   void carPreview(int car, float angle);
   void drawPause() { hud_.drawPause(); }
+  void drawFinish(float presentationSeconds, int camera) {
+    hud_.drawFinish(presentationSeconds, camera);
+  }
 
 private:
   Renderer &renderer_;
   Assets &assets_;
   Hud hud_;
   void scenery(const Race &, const Camera &);
+  void gantries(const Race &, const Camera &);
   void roadProps(const Race &, const Camera &);
   void rankMarker(const Camera &, int rank, Vec3 position, float yaw);
   void hud(const Race &, int camera, bool radar);

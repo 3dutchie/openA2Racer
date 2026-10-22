@@ -1,5 +1,23 @@
 # Verification of OpenA2 0.4.0
 
+Gameplay-reference corrections checked on 22 October 2026, macOS arm64:
+
+- Release build and all seventeen CTest checks pass, including new race-camera,
+  police and finish tests. Headless smoke runs extend through the camera and lights
+  phases into active racing in both graphics modes.
+- Additional supplied-CD HUD and race-detail integrations pass. Classic frames
+  were rendered and inspected for the overhead opening, cockpit/start gantry,
+  roadside police and original fine ticket.
+- Regressions cover separate camera/light phases, original stage time limits,
+  time bonuses, blue ticket glyphs, steering release and bends, roadside police
+  targeting/return, escalating fines, indefinite ticket pause, finish crossings/flag animation,
+  exact pending-ticket snapshots, and version1/version2 save migration.
+- The local build uses installed SDL2 2.32.10 and emits deployment-target warnings
+  because that library targets a newer macOS than the executable's11.0 minimum.
+  This pass does not validate macOS11 compatibility or repeat prior sanitizer runs.
+- Original acceleration/braking/speed units and police/camera timings remain
+  partly reconstructed. These checks do not establish full original-game fidelity.
+
 Local checks performed on 21 October 2026, macOS arm64:
 
 - C++20 release build with SDL2 2.32.10 compiled from pinned source.
@@ -67,3 +85,21 @@ Windows and Linux native CI jobs are configured, but were not run remotely in
 this local task. Controller hardware, actual macOS 11, and full original-game
 input/output comparisons remain unverified. See RECONSTRUCTION.md for recovered
 versus reconstructed game rules.
+
+
+The finish and header follow-up also checks the original-CD menu idle header
+against its background pixel-for-pixel, shared mouse bounds, all six stage
+finish gantries, and original flag frame order/hotspots/transparency. The scored
+finish snapshot receives one reward; frontend coasting uses a separate copy.
+
+A controlled straight-route fixture with original CD artwork also exercises
+the full headless frontend: frame520 shows the waving flag after crossing,
+and frame720 shows results with the same awarded money. The menu screenshot
+was rendered after the header fix and visually checked for aligned edges.
+
+Steering/radar follow-up: all17 CTest checks pass after adding wheel deflection.
+Regressions cover left/right wheel return on both route directions, stable car
+heading once centered, deterministic mid-return saves, version3 migration, and
+invalid wheel-state rejection. Original-CD HUD/race-detail integrations verify
+the dashboard-off camera's radar stays within the bottom-left panel in both
+graphics modes; original-art frames were rendered and inspected.

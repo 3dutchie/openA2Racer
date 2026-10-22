@@ -50,7 +50,10 @@ Full platform, offline build, test and packaging instructions:
 - Six selectable original cars, traffic, rival racers, police, collisions and fines.
 - Hittable red/white roadwork posts and original red rank meshes above racers.
 - Original scenery placement, terrain tile atlas, textured models and guardrails.
-- Fuel, countdown, race timer, money/time/fuel bonuses, results and progression.
+- Overhead race-start descent, original START/FINISH gantries and staggered grid.
+- Original waving checkered flag when crossing the finish, before results.
+- Remaining-time HUD, money/time/fuel bonuses, results and progression.
+- Roadside police stake-outs, lane interception and original fine-ticket artwork.
 - Cockpit, chase and helicopter cameras, radar and original cockpit artwork.
 - Original graphical time/money/position HUD, animated dashboard gauges and steering wheel.
 - Live enhanced graphics switch: 1280×960 rendering, edge antialiasing, 3× draw
@@ -80,12 +83,12 @@ release; other editions have not been verified. See [menus and profiles](docs/ME
 | Accelerate / brake | Up / Down or W / S | RT / LT; A also accelerates |
 | Steer | Left / Right or A / D | Left stick |
 | Handbrake | Space | X |
-| Cockpit / chase / helicopter | F1 / F2 / F3 | Right shoulder cycles |
-| Enhanced / classic graphics | F4 or G | Left shoulder |
-| Radar | F5 | — |
+| Cockpit / chase / helicopter | F1 / F2 / F3 or 1 / 2 / 3 | Right shoulder cycles |
+| Enhanced / classic graphics | F4, 4 or G | Left shoulder |
+| Radar | F5 or 5 | — |
 | Pause / resume | P; Enter resumes | Start |
-| Dismiss fine | Enter | — |
-| Quick save / load (slot 1) | F6 / F9 | — |
+| Dismiss fine | Enter / Space | A |
+| Quick save / load (slot 1) | F6 / F9 or 6 / 9 | — |
 | Restart stage | R | — |
 | Menu | Escape | B |
 | Toggle sound / fullscreen | M / F11 | — |
@@ -94,9 +97,12 @@ release; other editions have not been verified. See [menus and profiles](docs/ME
 
 BEDIENING remaps the four driving keys. WASD aliases apply while the default
 arrow bindings are selected. In the main menu, C opens car selection, T opens
-unlocked stages and S/L opens save slots. F1 opens menu help; Left/Right switches
+unlocked stages and S/L opens save slots. F1 or 1 opens menu help; Left/Right switches
 score tabs. The original 3D Accelerator option selects this port's enhanced mode;
 320×200 selects low-resolution presentation and 640×480 selects classic mode.
+
+Number keys 1–9, including the numeric keypad, mirror F1–F9. F7/F8 currently
+have no assigned action. Digits remain normal text when entering a player name.
 
 The game pauses when its window loses focus. Saves and settings live in SDL's
 per-user `OpenA2/OpenA2` preference directory, separately from the CD data. Slot

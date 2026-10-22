@@ -11,6 +11,7 @@ struct Input {
 };
 enum class RaceStatus { Countdown, Running, Finished, Failed };
 enum class VehicleKind { Traffic, Rival, Police };
+enum class PoliceMode { Parked, Intercepting, Pursuing, Returning };
 enum class PickupKind { Money, Fuel, Time };
 struct RoadPose {
   Vec3 position, forward, right;
@@ -21,6 +22,8 @@ struct Player {
   float distance = 0, lateral = 45, speed = 0, heading = 0, fuel = 100, timeLeft = 240;
   int money = 5000, car = 0, gear = 1;
   float elapsed = 0;
+  // Wheel deflection is independent of the car's road-relative heading.
+  float steering = 0;
 };
 struct Vehicle {
   float distance = 0, lateral = 45, speed = 0, targetSpeed = 0, targetLateral = 45;
@@ -28,6 +31,10 @@ struct Vehicle {
   int car = 0;
   bool oncoming = false;
   float cooldown = 0;
+  PoliceMode policeMode = PoliceMode::Parked;
+  float policeTimer = 0;
+  // -2 is unassigned, -1 is the player; other values index a rival in vehicles.
+  int policeTarget = -2;
 };
 struct Pickup {
   float distance = 0, lateral = 45;
@@ -72,8 +79,14 @@ public:
   bool reverse() const { return stage_ >= 3; }
   const Track &track() const;
   RoadPose pose(float distance, float lateral = 0) const;
+  // Stage-relative distance of the dynamically generated FINISH gantry.
+  float finishDistance() const;
   float countdown() const { return countdown_; }
+  float introCountdown() const {
+    return status_ == RaceStatus::Countdown ? std::max(0.0f, countdown_ - 3) : 0;
+  }
   float fineDelay() const { return fineDelay_; }
+  int fineAmount() const { return fineAmount_; }
   int position() const;
   // Returns 0 for traffic/police or an invalid index; rivals rank with the player.
   int rivalPosition(size_t vehicleIndex) const;
@@ -90,6 +103,8 @@ private:
   RaceStatus status_ = RaceStatus::Countdown;
   int stage_ = 0;
   float countdown_ = 3, fineDelay_ = 0, collisionCooldown_ = 0, policePressure_ = 0;
+  int fineAmount_ = 0;
+  int finesIssued_ = 0;
   unsigned random_ = 1;
   std::string failureReason_;
   std::vector<RaceEvent> events_;

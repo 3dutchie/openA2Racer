@@ -25,6 +25,22 @@ float clamp01(float v) {
 float moveTowards(float a, float b, float maxDelta) {
   return a + std::clamp(b - a, -maxDelta, maxDelta);
 }
+// Native POLICESPEED=17 and the stake-out trigger=9 share an internal
+// per-frame speed scale. Conversion to this port's km/h is reconstruction
+// tuning until the original frame cadence has been measured.
+constexpr float policeSpeedUnit = 15;
+float gridDistance(const Track &track, bool reverse, int rank) {
+  // Racer placement 0x411928: two staggered cars per source chunk,
+  // using chunk15 (count-15 on the return) as the grid reference.
+  if (track.road.size() < 32)
+    return std::min(500.0f, track.length() * .01f) + float(6 - rank) * 60;
+  const int direction = reverse ? -1 : 1;
+  const int base = reverse ? int(track.road.size()) - 15 : 15;
+  const int chunk = base - direction * ((rank - 1) / 2 + 1);
+  const float offset = float(direction * (rank % 2 ? 20 : -20));
+  const float source = std::clamp(track.distances[size_t(chunk)] + offset, 0.0f, track.length());
+  return reverse ? track.length() - source : source;
+}
 uint64_t trackFingerprint(const Track &t) {
   uint64_t value = 14695981039346656037ull;
   auto word = [&](uint32_t n) {
@@ -129,7 +145,7 @@ void Race::save(std::ostream &output) const {
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << std::setprecision(std::numeric_limits<float>::max_digits10);
-  out << "A2RACER_SAVE 2\n";
+  out << "A2RACER_SAVE 4\n";
   for (const auto &t : tracks_)
     out << trackFingerprint(t) << ' ';
   out << '\n'
@@ -155,6 +171,11 @@ void Race::save(std::ostream &output) const {
     out << p.distance << ' ' << p.lateral << ' ' << p.height << ' ' << p.forwardVelocity << ' '
         << p.lateralVelocity << ' ' << p.verticalVelocity << ' ' << p.pitch << ' ' << p.roll << ' '
         << p.yaw << ' ' << int(p.state) << '\n';
+  out << fineAmount_ << ' ' << finesIssued_ << '\n';
+  out << vehicles.size() << '\n';
+  for (const auto &v : vehicles)
+    out << int(v.policeMode) << ' ' << v.policeTimer << ' ' << v.policeTarget << '\n';
+  out << player.steering << '\n';
   out << "END\n";
   requireSave(bool(out));
   // Use the same validator for writes: public player data may have been changed
@@ -183,7 +204,7 @@ void Race::load(std::istream &input) {
   std::string magic;
   int version = 0;
   requireSave(bool(in >> magic >> version));
-  requireSave(magic == "A2RACER_SAVE" && (version == 1 || version == 2));
+  requireSave(magic == "A2RACER_SAVE" && (version >= 1 && version <= 4));
   for (const auto &t : tracks_) {
     uint64_t fingerprint = 0;
     requireSave(bool(in >> fingerprint));
@@ -196,7 +217,8 @@ void Race::load(std::istream &input) {
                    std::quoted(restored.failureReason_)));
   requireSave(restored.stage_ >= 0 && restored.stage_ < 6 && state >= 0 && state <= 3);
   restored.status_ = RaceStatus(state);
-  requireSave(finiteRange(restored.countdown_, 0, 3) && finiteRange(restored.fineDelay_, 0, 10) &&
+  requireSave(finiteRange(restored.countdown_, 0, version >= 3 ? 6 : 3) &&
+              finiteRange(restored.fineDelay_, 0, 10) &&
               finiteRange(restored.collisionCooldown_, 0, 5) &&
               finiteRange(restored.policePressure_, 0, 3) && restored.failureReason_.size() <= 512);
   auto &p = restored.player;
@@ -278,6 +300,35 @@ void Race::load(std::istream &input) {
       restored.roadProps.push_back(q);
     }
   }
+  if (version >= 3) {
+    requireSave(bool(in >> restored.fineAmount_ >> restored.finesIssued_));
+    requireSave(restored.fineAmount_ >= 0 && restored.fineAmount_ <= 9999 &&
+                restored.finesIssued_ >= 0 && restored.finesIssued_ <= 5);
+    requireSave(bool(in >> count));
+    requireSave(count == restored.vehicles.size());
+    for (auto &v : restored.vehicles) {
+      int mode = 0;
+      requireSave(bool(in >> mode >> v.policeTimer >> v.policeTarget));
+      requireSave(mode >= 0 && mode <= 3 && finiteRange(v.policeTimer, 0, 30) &&
+                  v.policeTarget >= -2 && v.policeTarget < int(restored.vehicles.size()));
+      requireSave(v.policeTarget < 0 ||
+                  restored.vehicles[size_t(v.policeTarget)].kind == VehicleKind::Rival);
+      v.policeMode = PoliceMode(mode);
+    }
+  } else {
+    // Old police were cruising vehicles; migrate them as already pursuing,
+    // preserving their exact position, speed and prior RNG state.
+    for (auto &v : restored.vehicles)
+      if (v.kind == VehicleKind::Police) {
+        v.policeMode = PoliceMode::Pursuing;
+        v.policeTarget = -1;
+      }
+    restored.fineAmount_ = restored.fineDelay_ > 0 ? 250 : 0;
+  }
+  if (version >= 4) {
+    requireSave(bool(in >> p.steering));
+    requireSave(finiteRange(p.steering, -1, 1));
+  }
   std::string end;
   requireSave(bool(in >> end));
   requireSave(end == "END");
@@ -289,6 +340,8 @@ void Race::load(std::istream &input) {
   status_ = restored.status_;
   countdown_ = restored.countdown_;
   fineDelay_ = restored.fineDelay_;
+  fineAmount_ = restored.fineAmount_;
+  finesIssued_ = restored.finesIssued_;
   collisionCooldown_ = restored.collisionCooldown_;
   policePressure_ = restored.policePressure_;
   random_ = restored.random_;
@@ -311,11 +364,16 @@ void Race::start(int stage, int car) {
   const auto &t = track();
   if (t.length() <= 0 || t.road.size() < 2)
     throw std::runtime_error("Empty race track");
-  player.distance = std::min(500.0f, t.length() * 0.01f);
-  player.timeLeft = std::max(90.0f, t.length() / 420.0f + 65.0f);
+  player.distance = gridDistance(t, reverse(), 6);
+  player.lateral = 60;
+  // Original A2.INI START1/2/3 values3/5/9 are multiplied by60 at
+  // 0x40c351..0x40c3ba, then mirrored for the three return stages.
+  constexpr float initialTimes[]{180, 300, 540, 540, 300, 180};
+  player.timeLeft = initialTimes[stage];
   status_ = RaceStatus::Countdown;
-  countdown_ = 3;
+  countdown_ = 6; // Camera descent, then start lights; three seconds per phase is reconstructed.
   fineDelay_ = collisionCooldown_ = policePressure_ = 0;
+  fineAmount_ = finesIssued_ = 0;
   failureReason_.clear();
   events_.clear();
   random_ = 0xa2u + unsigned(stage) * 1009;
@@ -340,8 +398,9 @@ void Race::populate() {
     Vehicle v;
     v.kind = VehicleKind::Rival;
     v.car = c;
-    v.distance = player.distance + 120.0f + float(vehicles.size()) * 100;
-    v.lateral = (vehicles.size() % 2) ? 30.0f : 60.0f;
+    const int rank = int(vehicles.size()) + 1;
+    v.distance = gridDistance(track(), reverse(), rank);
+    v.lateral = rank % 2 ? 30.0f : 60.0f;
     v.targetLateral = v.lateral;
     v.speed = 0;
     v.targetSpeed = 174 + random() * 23;
@@ -359,13 +418,24 @@ void Race::populate() {
     v.targetSpeed = v.speed;
     vehicles.push_back(v);
   }
-  for (float d = 2600; d < total - 600; d += 4500 + random() * 2500) {
+  // Original stage counts from A2.INI, initialized in staggered road chunks
+  // by 0x411473. Police start on the outer verge/shoulder, at rest.
+  constexpr std::array<int, 6> policeCounts{10, 14, 20, 25, 17, 15};
+  const size_t chunkStep = std::max(size_t(1), track().road.size() /
+                                                   size_t(2 * policeCounts[size_t(stage_)]));
+  size_t chunk = 0;
+  for (int i = 0; i < policeCounts[size_t(stage_)]; ++i) {
+    chunk += chunkStep + size_t(random() * float(chunkStep));
+    chunk = std::min(chunk, track().road.size() - 2);
     Vehicle v;
     v.kind = VehicleKind::Police;
     v.car = 0;
-    v.distance = d;
-    v.lateral = v.targetLateral = 60;
-    v.speed = v.targetSpeed = 95 + random() * 20;
+    v.distance = reverse() ? total - track().distances[track().road.size() - 1 - chunk]
+                           : track().distances[chunk];
+    // Lane slots 0/1 of the original offset table are 108 and 85.
+    v.lateral = v.targetLateral = random() < 0.5f ? 108.0f : 85.0f;
+    v.speed = 0;
+    v.targetSpeed = 17 * policeSpeedUnit;
     vehicles.push_back(v);
   }
   // The original generates bonus objects independently of OMP scenery. Lane
@@ -407,6 +477,17 @@ void Race::populateRoadProps() {
       roadProps.push_back(p);
     }
   }
+}
+
+float Race::finishDistance() const {
+  const auto &t = track();
+  // Original stage setup places FINISH at source count-15 outbound, and
+  // source15 on return. Minimal procedural tracks have no such end zones.
+  if (t.road.size() < 32)
+    return std::max(0.0f, t.length() - 80);
+  const size_t chunk = reverse() ? 15 : t.road.size() - 15;
+  const float source = t.distances[chunk];
+  return reverse() ? t.length() - source : source;
 }
 
 int Race::position() const {
@@ -493,11 +574,10 @@ void Race::tick(float dt, const Input &input) {
     }
     return;
   }
-  collisionCooldown_ = std::max(0.0f, collisionCooldown_ - dt);
   if (fineDelay_ > 0) {
-    fineDelay_ = std::max(0.0f, fineDelay_ - dt);
     return;
   }
+  collisionCooldown_ = std::max(0.0f, collisionCooldown_ - dt);
   for (size_t i = 0; i < roadProps.size(); ++i) {
     auto &p = roadProps[i];
     if (p.state != RoadPropState::Flying)
@@ -533,6 +613,9 @@ void Race::tick(float dt, const Input &input) {
   float throttle = std::isfinite(input.throttle) ? clamp01(input.throttle) : 0;
   float brake = std::isfinite(input.brake) ? clamp01(input.brake) : 0;
   float steer = std::isfinite(input.steer) ? std::clamp(input.steer, -1.0f, 1.0f) : 0;
+  // The original controller centers wheel input separately from world heading.
+  // These seconds-based turn/return rates are reconstructed.
+  player.steering = moveTowards(player.steering, steer, dt * (steer == 0 ? 6.0f : 8.0f));
   const float drag = 1.0f + 0.00012f * player.speed * player.speed;
   const float acceleration = car.acceleration * (1.0f - 0.45f * player.speed / car.maxSpeed);
   player.speed +=
@@ -548,9 +631,15 @@ void Race::tick(float dt, const Input &input) {
       std::max(0.0f, player.fuel - dt * (0.025f + player.speed * 0.00125f + throttle * 0.055f));
   const float velocity = player.speed * (10.0f / 3.6f);
   const float previousDistance = player.distance, previousLateral = player.lateral;
-  player.heading +=
-      steer * dt * (0.95f / (1 + player.speed / 200.0f)) * (input.handbrake ? 1.7f : 1.0f);
-  player.heading *= std::exp(-2.8f * dt);
+  // Original 0x40365b/0x4036d2 adds wheel input to the world heading;
+  // 0x40311c recenters the wheel, not the car's heading. Preserve direction
+  // after releasing steering instead of silently aiming back down the road.
+  // Turn gain remains a seconds-based reconstruction; native tick cadence and
+  // the speed-to-km/h mapping have not been established.
+  if (player.speed > 0.01f)
+    player.heading +=
+        player.steering * dt * (0.95f / (1 + player.speed / 200.0f)) *
+        (input.handbrake ? 1.7f : 1.0f);
   player.heading = std::clamp(player.heading, -0.65f, 0.65f);
   const float approachSide = player.lateral < 0 ? -1.0f : 1.0f;
   player.lateral += std::sin(player.heading) * velocity * dt;
@@ -577,21 +666,95 @@ void Race::tick(float dt, const Input &input) {
   }
   player.distance =
       std::min(track().length(), player.distance + std::cos(player.heading) * velocity * dt);
+  // heading is stored relative to the road here; native 0x45b250 is an
+  // independent world angle. Account for the road turning underneath the car
+  // so a bend does not steer the car automatically (also on return stages).
+  const auto previousRoad = pose(previousDistance), currentRoad = pose(player.distance);
+  const float roadTurn = std::atan2(dot(currentRoad.forward, previousRoad.right),
+                                    dot(currentRoad.forward, previousRoad.forward));
+  player.heading = std::clamp(player.heading - roadTurn, -0.65f, 0.65f);
   strikeRoadProps(previousDistance, previousLateral, player.distance, player.lateral,
                   player.speed, player.heading, true);
 
   for (auto &v : vehicles) {
     const float previousVehicleDistance = v.distance, previousVehicleLateral = v.lateral;
     v.cooldown = std::max(0.0f, v.cooldown - dt);
-    const float relative = v.distance - player.distance;
     float desired = v.targetSpeed;
     if (v.kind == VehicleKind::Police) {
-      const bool pursuit = std::abs(relative) < 1600 && player.speed > 145;
-      desired = pursuit ? std::max(170.0f, player.speed + 15) : 105.0f;
-      if (pursuit)
-        v.targetLateral = std::clamp(player.lateral, 20.0f, 70.0f);
+      // 0x40d8aa has separate stake-out, intercept and return states. Its
+      // stake-out searches six chunks ahead for speeding racers, including
+      // rivals: a car parked ahead of the player can pull out behind a rival.
+      auto chunkGap = [&](float distance) {
+        return std::abs(int(pose(distance).segment) - int(pose(v.distance).segment));
+      };
+      if (v.policeMode == PoliceMode::Parked) {
+        desired = 0;
+        float closest = track().length();
+        auto consider = [&](int index, float distance, float lateral, float speed) {
+          if (distance < v.distance || distance - v.distance >= closest || lateral < 10 ||
+              speed <= 9 * policeSpeedUnit || chunkGap(distance) > 6)
+            return;
+          int pursuers = 0;
+          for (const auto &other : vehicles)
+            if (other.kind == VehicleKind::Police && other.policeTarget == index &&
+                (other.policeMode == PoliceMode::Intercepting ||
+                 other.policeMode == PoliceMode::Pursuing))
+              ++pursuers;
+          if (pursuers >= 2)
+            return;
+          closest = distance - v.distance;
+          v.policeTarget = index;
+        };
+        consider(-1, player.distance, player.lateral, player.speed);
+        for (size_t i = 0; i < vehicles.size(); ++i)
+          if (vehicles[i].kind == VehicleKind::Rival)
+            consider(int(i), vehicles[i].distance, vehicles[i].lateral, vehicles[i].speed);
+        if (v.policeTarget != -2) {
+          v.policeMode = PoliceMode::Intercepting;
+          v.policeTimer = 0;
+        }
+      }
+      if (v.policeMode == PoliceMode::Intercepting || v.policeMode == PoliceMode::Pursuing) {
+        const Vehicle *rival = v.policeTarget >= 0 && size_t(v.policeTarget) < vehicles.size()
+                                   ? &vehicles[size_t(v.policeTarget)]
+                                   : nullptr;
+        const float targetDistance = rival ? rival->distance : player.distance;
+        const float targetLateral = rival ? rival->lateral : player.lateral;
+        const float targetSpeed = rival ? rival->speed : player.speed;
+        v.policeTimer += dt;
+        if (targetLateral < 10 || chunkGap(targetDistance) > 9 || v.policeTimer >= 20) {
+          v.policeMode = PoliceMode::Returning;
+          v.policeTarget = -2;
+          v.policeTimer = 7;
+        } else {
+          v.targetLateral = targetLateral < 45 ? 30.0f : 60.0f;
+          desired = v.targetSpeed;
+          if (std::abs(v.lateral - v.targetLateral) < 3) {
+            v.policeMode = PoliceMode::Pursuing;
+            // The original matches a nearby target's lane and slows to just
+            // below its speed, rather than always outrunning the player.
+            if (chunkGap(targetDistance) <= 1)
+              desired = std::max(0.0f, targetSpeed - policeSpeedUnit);
+            if (rival && std::abs(targetDistance - v.distance) < 100 &&
+                std::abs(v.lateral - targetLateral) < 12) {
+              v.policeMode = PoliceMode::Returning;
+              v.policeTarget = -2;
+              v.policeTimer = 7;
+            }
+          }
+        }
+      }
+      if (v.policeMode == PoliceMode::Returning) {
+        v.targetLateral = 108;
+        desired = std::abs(v.lateral - 108) > 2 ? std::min(v.targetSpeed, 80.0f) : 0;
+        v.policeTimer = std::max(0.0f, v.policeTimer - dt);
+        if (desired == 0 && v.speed < 1 && v.policeTimer == 0) {
+          v.policeMode = PoliceMode::Parked;
+          v.policeTarget = -2;
+        }
+      }
     }
-    if (!v.oncoming) {
+    if (!v.oncoming && v.kind != VehicleKind::Police) {
       // Local lane occupancy reproduces the intended overtaking behaviour without
       // purporting to translate the original driver tactic state machines.
       const Vehicle *blocking = nullptr;
@@ -645,25 +808,35 @@ void Race::tick(float dt, const Input &input) {
 
   bool policeNear = false;
   for (const auto &v : vehicles) {
-    if (v.kind != VehicleKind::Police)
+    if (v.kind != VehicleKind::Police || v.policeTarget != -1 ||
+        v.policeMode != PoliceMode::Pursuing)
       continue;
-    if (std::abs(v.distance - player.distance) < 150 && std::abs(v.lateral - player.lateral) < 55 &&
-        player.speed > 145)
+    if (std::abs(v.distance - player.distance) < 100 && std::abs(v.lateral - player.lateral) < 12)
       policeNear = true;
   }
   policePressure_ = policeNear ? policePressure_ + dt : std::max(0.0f, policePressure_ - dt);
-  if (policePressure_ > 2.5f) {
-    const int fine = std::max(100, int((player.speed - 120) * 5));
+  if (policePressure_ > 0.25f) {
+    constexpr std::array<int, 6> fines{250, 500, 800, 1200, 1500, 2000};
+    const int fine = fines[size_t(std::min(finesIssued_, 5))];
+    finesIssued_ = std::min(finesIssued_ + 1, 5);
+    fineAmount_ = fine;
     player.money -= fine;
     player.speed = 0;
     policePressure_ = 0;
-    fineDelay_ = 2.5f;
+    fineDelay_ = 1;
+    for (auto &v : vehicles)
+      if (v.kind == VehicleKind::Police && v.policeTarget == -1) {
+        v.policeMode = PoliceMode::Returning;
+        v.policeTarget = -2;
+        v.policeTimer = 7;
+      }
     emit("sp_p1.wav", "POLICE FINE: FL " + std::to_string(fine));
     if (player.money < 0) {
       player.money = 0;
       fail("NO MONEY FOR THE FINE");
       return;
     }
+    return;
   }
 
   for (auto &p : pickups) {
@@ -683,13 +856,14 @@ void Race::tick(float dt, const Input &input) {
       emit("sp_b2.wav", "");
       break;
     case PickupKind::Time:
-      player.timeLeft += 15;
-      emit("bonust.wav", "15 SECOND BONUS");
+      // A2.INI [BONUS] TIME=2, converted to seconds at0x40c33d.
+      player.timeLeft += 120;
+      emit("bonust.wav", "TIME BONUS");
       emit("sp_b1.wav", "");
       break;
     }
   }
-  if (player.distance >= track().length() - 80) {
+  if (player.distance >= finishDistance()) {
     status_ = RaceStatus::Finished;
     player.speed = 0;
     const int award = std::max(0, 7 - position()) * 500;

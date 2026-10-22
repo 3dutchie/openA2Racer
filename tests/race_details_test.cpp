@@ -26,7 +26,7 @@ std::string snapshot(const Race &race) {
   return out.str();
 }
 void running(Race &race) {
-  for (int n = 0; n < 361; ++n)
+  for (int n = 0; n < 721; ++n)
     race.update(1.0f / 120, {});
   check(race.status() == RaceStatus::Running, "Countdown must complete");
   race.vehicles.clear();
@@ -167,8 +167,8 @@ void impactsAndSaves(const std::array<Track, 3> &tracks) {
   original.roadProps.clear();
   std::string legacy = snapshot(original);
   legacy.replace(13, 1, "1");
-  check(legacy.ends_with("0\nEND\n"), "Migration fixture ends in an empty prop extension");
-  legacy.erase(legacy.size() - 6, 2);
+  check(legacy.ends_with("0\n0 0\n0\n0\nEND\n"), "Migration fixture ends in empty v2/v3/v4 extensions");
+  legacy.erase(legacy.size() - 14, 10);
   Race restored(tracks);
   std::istringstream old(legacy);
   restored.load(old);
@@ -180,9 +180,11 @@ void impactsAndSaves(const std::array<Track, 3> &tracks) {
   check(snapshot(original) == snapshot(restored), "Migration preserves every prior field and RNG");
 
   std::string corrupt = snapshot(restored);
-  auto last = corrupt.rfind('\n', corrupt.size() - 6);
+  const auto extension = corrupt.rfind("\n0 0\n0\n0\nEND\n");
+  check(extension != std::string::npos, "Locate the v3 extension after the last serialized prop");
+  const auto last = corrupt.rfind('\n', extension - 1);
   check(last != std::string::npos, "Locate the last serialized prop");
-  corrupt.replace(last + 1, corrupt.size() - last - 6, "nan 85 0 0 0 0 0 0 0 0");
+  corrupt.replace(last + 1, extension - last - 1, "nan 85 0 0 0 0 0 0 0 0");
   const auto before = snapshot(restored);
   bool rejected = false;
   try {
@@ -214,6 +216,7 @@ void originalAssets(const char *path) {
   Race race(tracks);
   for (bool enhanced : {false, true}) {
     race.start();
+    running(race);
     race.vehicles.clear();
     race.pickups.clear();
     race.player.distance = race.roadProps[0].distance - 150;
@@ -255,6 +258,23 @@ void originalAssets(const char *path) {
       check(numeralPixels > 0, "Rival rank markers update in each camera and graphics mode");
       race.vehicles.pop_back();
     }
+    // Camera1 without dashboard uses the standalone HUD rather than the
+    // cockpit housing. Radar changes must remain within the bottom-left panel.
+    scene.draw(race, 0, false, true, false);
+    const auto noRadar = renderer.pixels();
+    scene.draw(race, 0, true, true, false);
+    const int scale = renderer.pixelWidth() / 640;
+    size_t radarPixels = 0;
+    for (int y = 0; y < renderer.pixelHeight(); ++y)
+      for (int x = 0; x < renderer.pixelWidth(); ++x) {
+        const auto pixel = size_t(y) * renderer.pixelWidth() + x;
+        if (renderer.pixels()[pixel] == noRadar[pixel])
+          continue;
+        check(x < 120 * scale && y >= 380 * scale,
+              "Dashboard-off cockpit radar must stay at bottom left in both graphics modes");
+        ++radarPixels;
+      }
+    check(radarPixels > 100, "Dashboard-off radar must actually render");
   }
 }
 } // namespace

@@ -201,14 +201,15 @@ each call uses a signed sprite hotspot or a direct top-left position. The
 portable HUD reads those original assets at runtime using the `SURSCRN.pcx`
 palette. Sprite transparency is index 255; enclosed black instrument faces
 and the VDsys screen remain opaque. The counter arithmetic divides by 60
-and 3600, so the elapsed display preserves HH:MM:SS.
+and 3600. The displayed timer is remaining race time in HH:MM:SS; elapsed time
+is retained separately for scores.
 
 The original speed gauge has 40 frames, RPM and fuel 20 each, and the wheel 15.
 Their pixels, order and positions are recovered; driving their frames from
 the new simulation requires adapters. Speed uses the printed0..250km/h
 face, fuel maps the port's 0..100 level over 20 frames, and RPM is estimated
-from speed and gear with 1000 RPM idle. Steering frames follow the port's
-heading. These calibrations, engine dynamics, start-light timing and radar
+from speed and gear with 1000 RPM idle. Steering frames follow the port's separate wheel deflection, which returns
+to center when steering is released. These calibrations, engine dynamics, start-light timing and radar
 dot projection remain reconstructions. The source-specific extraction,
 animation-table file offsets and disassembly are retained in
 `analysis/hud/FINDINGS.md` and `analysis/hud/animations.json`.
@@ -237,10 +238,10 @@ deterministic reconstruction values rather than decompiler translations:
 
 - acceleration, drag, brake/handbrake forces, top speed and steering response;
 - conversion between world units, metres and displayed kilometres per hour;
-- countdown, initial time, fuel consumption and per-stage fuel refill;
-- traffic density, speed, overtaking, police pursuit/fine calculation;
+- camera/countdown duration, fuel consumption and per-stage fuel refill;
+- traffic density, speed, overtaking and police pursuit timing/speed conversion;
 - collision envelopes and response;
-- bonus locations and amounts, race awards and campaign money lifecycle;
+- bonus locations, money/fuel amounts, race awards and campaign money lifecycle;
 - opponent time/position competition and return-route traffic placement.
 
 The simulation operates in bounded substeps of at most 1/120 second, with
@@ -265,7 +266,7 @@ consistency; they do not establish equivalence to original gameplay.
 ## Portable saves
 
 `Race::save` / `Race::load` implement a new versioned save format headed
-`A2RACER_SAVE 1`. It preserves player state, complete entity lists, collected
+`A2RACER_SAVE 4`. Versions 1 through 3 remain readable. It preserves player state, complete entity lists, collected
 bonuses, simulation phase, countdown, fine/collision/police timers, seeded RNG,
 failure reason and queued events. Float text uses enough digits for exact float
 round trips. Fingerprints cover all road and OMP records in each route, so saves
@@ -336,3 +337,98 @@ full instruction ranges and limits are retained in
 `analysis/race_details/FINDINGS.md`. Both renderer modes and all cameras share
 these objects. Schema 2 snapshots retain airborne prop motion; schema 1 migration
 restores pristine zones while preserving prior state and RNG.
+
+
+## Gameplay-reference corrections, 22 October 2026
+
+Original-game screenshots were compared with the supplied executable, INI and
+artwork. The following corrections distinguish recovered facts from port timing:
+
+- Stage setup `0x411296` creates START and FINISH gantries separately from OMP
+  scenery. They now use original meshes at source chunks 16/count-16 for START,
+  and count-15/15 for FINISH, on the stage's carriageway at lateral 60. The grid
+  follows `0x411928`: two staggered racers per source chunk, lanes 30/60, with
+  +/-20-unit longitudinal offsets. The player begins sixth.
+- The dispatcher at `0x40c814` runs the camera descent before the start lights.
+  New races have separate three-second camera and three-second light phases.
+  Their ordering is recovered; the durations and interpolation are reconstructed.
+  Previous snapshots with countdown <=3 resume in the lights phase.
+- Routine `0x40946e` displays remaining time (`0x458c54`), decremented by
+  `0x411ff3`. `0x40c33d..0x40c3ba` multiplies INI minutes by60: the supplied
+  START1/2/3 values give 180/300/540 seconds, mirrored on return stages, and
+  BONUS TIME=2 gives a 120-second pickup. Elapsed score time remains separate.
+- Pickup speech remains audible without the port's added black event banner.
+- Ticket routine `0x4121b3..0x412423` uses original GAMESPR panel301 and blue
+  glyphs at the recovered positions. Enter/Space dismiss it; it stays visible
+  and holds the simulation until dismissal. Table `0x459110` supplies fines
+  250,500,800,1200,1500,2000, capped at the last amount.
+- Police initialization `0x411aa9` places stationary cars on lanes85/108;
+  the supplied INI specifies 10/14/20/25/17/15 cars by stage. Driver `0x40d8aa`
+  observes racers ahead, pulls toward their lane, and returns to the shoulder.
+  The port now represents those states for rivals and the player. Its native
+  speed conversion, catch radius and timing, escape limit and return duration
+  remain explicitly approximate. A separate pedestrian officer is unverified.
+- Player heading persists after steering release and remains independent of
+  the road tangent through bends; steering no longer rotates a stopped car.
+  These follow controller `0x40311c..0x403729`. Original generated speed and
+  steering tables were recorded, but their frame cadence and speed units are
+  unresolved. Acceleration, braking, top speeds, wheel ramping and traction
+  are still reconstruction work; exact original handling is not claimed.
+
+Schema3 adds the pending fine amount, capped escalation count and each police
+car's mode, timer and target. Old saves retain vehicle positions/speeds, with
+cruising police migrated to pursuit. New snapshots round-trip those states and
+reject invalid target references atomically.
+
+Local investigation records are in `analysis/fidelity/{start,handling,police}.md`
+and `analysis/fidelity/ticket-timer-disassembly.txt`. Read-only static inspection
+used the same original SHA-256 identified above. REA xref evidence includes
+`ev_a847f9d55684e497e8d1243f5065d4f53bbeff3ab3e69819d7ba08cef00d12bf`,
+`ev_a4ae4bd487bde1ed4a1e696a560209696466ea5712d4a64402db931fba4d2ec9`,
+and `ev_803a5f0a4e710fdab060f822cf1fe715f7a406bd2f1a0f87f564764bb3b43ddb`.
+Byte-checked LLVM disassembly filled gaps caused by Hopper session-lock/startup
+failures; originals were not modified or run. This is static evidence and
+screenshot comparison, not a measured original-game input/output replay.
+
+
+### Finish presentation and menu header alignment
+
+The supplied screenshots also show the flag after FINISH. Native finish check
+`0x411258..0x411294` compares the player chunk with15 on return stages or
+count-15 outbound. The port now completes the stage at the rendered gantry
+rather than near the end of the road data. Original GAMESPR animation19 supplies
+the sixteen large checkered-flag frames in their recovered wrap order, drawn
+at(320,200), or(320,160) with the cockpit. Routine `0x41166b` establishes
+those anchors and animation selection.
+
+The frontend records the completed result once, then shows the flag for three
+seconds before results; Enter skips it. A temporary presentation copy coasts
+past the line and advances the visible timer/traffic without altering the
+scored snapshot or issuing further rewards. The three-second duration,10fps
+animation and seconds-based coasting slowdown are port presentation choices;
+native per-loop cadence has not been measured. Source evidence and limitations
+are retained locally in `analysis/fidelity/finish.md`.
+
+Menu header sprites now draw at(9,27) for Einde and(528,27) for Help, exactly
+matching their idle pixels already present in `hoofd.pcx`. Drawing and mouse
+hit-testing share these coordinates, removing the doubled, offset button edges.
+The original-CD menu integration checks pixel-identical idle composition.
+
+
+### Steering return and standalone radar
+
+Wheel deflection is now distinct from car heading. Keyboard/controller input
+ramps the wheel toward the requested deflection; release returns it smoothly
+to exact center. That deflection drives turning and the cockpit wheel sprites.
+After centering, the car keeps its current world direction rather than snapping
+back to a road tangent. This follows the separate wheel/world-angle structure
+already recovered at `0x40311c..0x403729`; the8/s turn and6/s return rates
+remain seconds-based reconstruction choices.
+
+Schema4 appends normalized wheel deflection, validates its finite[-1,1] range,
+and preserves deterministic continuation during wheel return. Versions1..3
+load with centered wheels while retaining heading and the other saved fields.
+The standalone radar now sits at(0,380), size120x100 in640x480 coordinates,
+matching the bottom-left gameplay references. Camera1 with its dashboard hidden
+uses this layout, as do external cameras; the visible cockpit retains the VDsys
+screen's existing radar placement.

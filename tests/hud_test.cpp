@@ -111,7 +111,7 @@ void composition() {
   Race race(road);
   race.player.speed = 0;
   race.player.fuel = 0;
-  race.player.elapsed = 3723;
+  race.player.timeLeft = 3723;
   race.player.money = 12345;
   renderer.clear(0xff123456);
   hud.draw(race, 0, false);
@@ -124,24 +124,72 @@ void composition() {
   check(pixel(renderer, 65, 24) == color(30) && pixel(renderer, 85, 24) == color(21) &&
             pixel(renderer, 122, 24) == color(30) && pixel(renderer, 143, 24) == color(22) &&
             pixel(renderer, 178, 24) == color(30) && pixel(renderer, 199, 24) == color(23),
-        "Elapsed time must use original HH:MM:SS and per-glyph hotspots");
+        "Remaining time must use original HH:MM:SS and per-glyph hotspots");
   check(pixel(renderer, 145, 54) == color(25), "Money above four digits must not be truncated");
   auto rpm = pixel(renderer, 135, 319);
   race.player.speed = 200;
   race.player.gear = 4;
   race.player.fuel = 100;
   race.player.heading = .5f;
+  race.player.steering = 1;
   renderer.clear(0xff123456);
   hud.draw(race, 0, false);
   check(pixel(renderer, 215, 320) != color(55), "Speedometer must respond to speed");
   check(pixel(renderer, 135, 319) != rpm, "Tachometer must respond to engine speed");
   check(pixel(renderer, 292, 328) == color(267), "Fuel gauge must respond to fuel level");
   check(pixel(renderer, 44, 348) != color(82), "Steering wheel must respond to steering");
+  race.player.steering = 0;
+  renderer.clear(0xff123456);
+  hud.draw(race, 0, false);
+  check(pixel(renderer, 44, 348) == color(82),
+        "Centered wheel must stay centered when the car faces across the road");
+  for (int camera : {1, 2}) {
+    renderer.clear(0xff123456);
+    hud.draw(race, camera, true);
+    check(pixel(renderer, 0, 380) == 0xff000000 && pixel(renderer, 119, 479) == 0xff000000,
+          "Standalone radar sits at bottom left");
+    check(pixel(renderer, 520, 100) == 0xff123456,
+          "Standalone radar must leave the upper-right view clear");
+  }
   renderer.clear(0xff123456);
   hud.draw(race, 1, false);
   check(pixel(renderer, 484, 358) != 0xff123456, "External camera instruments missing");
   hud.drawPause();
   check(pixel(renderer, 319, 240) == color(331), "Original pause panel missing");
+  renderer.clear(0xff123456);
+  hud.drawFinish(0, 1);
+  check(pixel(renderer, 319, 200) == color(298), "Finish flag uses the original wrap frame and anchor");
+  check(pixel(renderer, 320, 200) == 0xff000000 && pixel(renderer, 321, 200) == 0xff123456,
+        "Finish flag preserves black pixels and masks palette index255");
+  renderer.clear(0xff123456);
+  hud.drawFinish(.11f, 1);
+  check(pixel(renderer, 319, 200) == color(284), "Finish flag follows the recovered animation order");
+  renderer.clear(0xff123456);
+  hud.drawFinish(.11f, 0);
+  check(pixel(renderer, 319, 160) == color(284), "Cockpit finish flag shifts up forty pixels");
+  Race ticket(road);
+  while (ticket.status() == RaceStatus::Countdown)
+    ticket.update(.25f, {});
+  ticket.pickups.clear();
+  Vehicle cop;
+  cop.kind = VehicleKind::Police;
+  cop.policeMode = PoliceMode::Pursuing;
+  cop.policeTarget = -1;
+  cop.distance = ticket.player.distance + 35;
+  cop.lateral = cop.targetLateral = ticket.player.lateral;
+  ticket.vehicles = {cop};
+  for (int step = 0; step < 60 && ticket.fineDelay() == 0; ++step)
+    ticket.update(1.0f / 120, {});
+  check(ticket.fineAmount() == 250, "HUD fine fixture must catch the player");
+  renderer.clear(0xff123456);
+  hud.draw(ticket, 1, false);
+  check(pixel(renderer, 160, 100) == color(301), "Original ticket panel placement missing");
+  check(pixel(renderer, 401, 230) == color(303) &&
+            pixel(renderer, 413, 230) == color(306) && pixel(renderer, 425, 230) == color(53),
+        "Fine amount uses original blue digit mapping and hotspots");
+  renderer.clear(0xff123456);
+  hud.draw(ticket, 0, false);
+  check(pixel(renderer, 160, 60) == color(301), "Cockpit ticket shifts up by forty pixels");
 }
 void fallback() {
   Fixture fixture(2);
