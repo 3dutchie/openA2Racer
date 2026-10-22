@@ -1,0 +1,12 @@
+/.DS_Store
+/A2-Racer_Win_NL/
+/build*/
+/dist/
+/out/
+/analysis/
+*.user
+*.suo
+*.dSYM/
+__pycache__/
+*.py[cod]
+CMakeUserPresets.json
